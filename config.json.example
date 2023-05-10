@@ -1,0 +1,9 @@
+{
+    "container_name": "nimiq",
+    "file_path": "/root/data",
+    "bucket_name": "nimiq-v1",
+    "access_key": "xxxxxxxxxxxxxx",
+    "secret_key": "xxxxxxxxxxxxxxx",
+    "endpoint": "https://s3.REGION.wasabisys.com",
+    "region": "eu-central-1"
+}
