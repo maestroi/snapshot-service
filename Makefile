@@ -6,7 +6,7 @@ GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 
 # Name of the binary to be built
-BINARY_NAME=myproject
+BINARY_NAME=snapshot-service
 
 # Directories
 CMD_DIR=./cmd

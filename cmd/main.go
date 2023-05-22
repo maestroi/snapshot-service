@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,27 +9,46 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/klauspost/pgzip"
 	"github.com/robfig/cron/v3"
 	"golang.org/x/net/context"
 )
 
 type Config struct {
-	ContainerName string `json:"container_name"`
-	FilePath      string `json:"file_path"`
-	BucketName    string `json:"bucket_name"`
-	AccessKey     string `json:"access_key"`
-	SecretKey     string `json:"secret_key"`
-	Endpoint      string `json:"endpoint"`
-	Region        string `json:"region"`
+	ContainerName  string `json:"container_name"`
+	Network        string `json:"network"`
+	Protocol       string `json:"protocol"`
+	ProtocolVer    string `json:"protocol_version"`
+	CrontTime      string `json:"cron_time"`
+	FilePath       string `json:"file_path"`
+	BucketName     string `json:"bucket_name"`
+	AccessKey      string `json:"access_key"`
+	SecretKey      string `json:"secret_key"`
+	Endpoint       string `json:"endpoint"`
+	Region         string `json:"region"`
+	SnapshotToKeep int    `json:"snapshot_to_keep"`
+}
+
+type SnapshotStatus struct {
+	DateTime        string `json:"dateTime"`
+	Hostname        string `json:"hostname"`
+	FileName        string `json:"fileName"`
+	Status          string `json:"status"`
+	Network         string `json:"network"`
+	Protocol        string `json:"protocol"`
+	ProtocolVersion string `json:"protocolVersion"`
 }
 
 var config *Config
@@ -47,7 +65,7 @@ func init() {
 			log.Fatalf("Error loading configuration from file: %v", err)
 		}
 	} else {
-		config = loadConfigFromEnv()
+		log.Fatalf("No configuration file provided")
 	}
 }
 
@@ -57,14 +75,6 @@ func getDockerClient() (*client.Client, error) {
 		return nil, err
 	}
 	return cli, nil
-}
-
-func loadConfigFromEnv() *Config {
-	return &Config{
-		ContainerName: os.Getenv("CONTAINER_NAME"),
-		FilePath:      os.Getenv("FILE_PATH"),
-		BucketName:    os.Getenv("BUCKET_NAME"),
-	}
 }
 
 func loadConfig(filePath string) (*Config, error) {
@@ -85,6 +95,105 @@ func loadConfig(filePath string) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+func currentDateTime() string {
+	return time.Now().Format("20060102-150405")
+}
+
+func pruneOldSnapshots() error {
+	sess, err := session.NewSession(&aws.Config{
+		Region:           aws.String(config.Region),
+		Credentials:      credentials.NewStaticCredentials(config.AccessKey, config.SecretKey, ""),
+		Endpoint:         aws.String(config.Endpoint),
+		S3ForcePathStyle: aws.Bool(true),
+	})
+	if err != nil {
+		return err
+	}
+
+	bucketName := config.BucketName
+	prefix := fmt.Sprintf("%s-%s-", config.Protocol, config.Network)
+	logPrefix := "pruneOldSnapshots: "
+
+	svc := s3.New(sess)
+
+	resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(bucketName), Prefix: aws.String(prefix)})
+	if err != nil {
+		return err
+	}
+
+	// Filter files based on pattern and parse their timestamps
+	type fileWithTimestamp struct {
+		key       string
+		timestamp time.Time
+	}
+	files := []fileWithTimestamp{}
+
+	log.Printf("%sLooking for old snapshot files in bucket %s", logPrefix, bucketName)
+	for _, item := range resp.Contents {
+		key := *item.Key
+		if strings.HasPrefix(key, fmt.Sprintf("%s-%s-", config.Protocol, config.Network)) {
+			timestampStr := strings.TrimSuffix(strings.TrimPrefix(key, fmt.Sprintf("%s-%s-", config.Protocol, config.Network)), ".tar.gz")
+			timestamp, err := time.Parse("20060102-150405", timestampStr)
+			if err != nil {
+				return err
+			}
+			files = append(files, fileWithTimestamp{key: key, timestamp: timestamp})
+		}
+	}
+
+	// Sort files by timestamp
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].timestamp.After(files[j].timestamp)
+	})
+
+	// Delete all but the last x files
+	if len(files) > config.SnapshotToKeep {
+		log.Printf("%sFound %d files in bucket %s, deleting older ones", logPrefix, len(files), bucketName)
+		for _, file := range files[5:] {
+			log.Printf("%sDeleting file %s", logPrefix, file.key)
+			_, err := svc.DeleteObject(&s3.DeleteObjectInput{Bucket: aws.String(bucketName), Key: aws.String(file.key)})
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		log.Printf("%sFound %d files in bucket %s, nothing to delete", logPrefix, len(files), bucketName)
+	}
+
+	return nil
+}
+
+func generateSnapshotStatus(status string, filename string) error {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return err
+	}
+
+	currentDateTime := currentDateTime()
+
+	snapshotStatus := SnapshotStatus{
+		DateTime:        currentDateTime,
+		Protocol:        config.Protocol,
+		ProtocolVersion: config.ProtocolVer,
+		Network:         config.Network,
+		FileName:        filename,
+		Hostname:        hostname,
+		Status:          status,
+	}
+
+	jsonData, err := json.MarshalIndent(snapshotStatus, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	err = os.WriteFile("snapshot-latest.json", jsonData, 0644)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func getContainerID(containerName string) (string, error) {
@@ -122,7 +231,7 @@ func stopContainer(containerName string) error {
 	}
 	defer cli.Close()
 
-	timeout := int(30)
+	timeout := int(10)
 	stopOptions := container.StopOptions{
 		Timeout: &timeout,
 	}
@@ -184,7 +293,7 @@ func createTarGz(folderPath string, archivePath string) error {
 	}
 	defer file.Close()
 
-	gw := gzip.NewWriter(file)
+	gw, _ := pgzip.NewWriterLevel(file, pgzip.BestSpeed)
 	defer gw.Close()
 
 	tw := tar.NewWriter(gw)
@@ -228,12 +337,20 @@ func createTarGz(folderPath string, archivePath string) error {
 	return err
 }
 func main() {
-	log.Println("Nimiq snapshot Genrator started")
-	log.Println("Set crontime to: @daily")
+	log.Printf("%s snapshot Genrator started", config.Protocol)
+	log.Println("Protocol: " + config.Protocol)
+	log.Println("Network: " + config.Network)
 
+	pruneOldSnapshots()
+	if config.CrontTime == "direct" {
+		log.Println("StartSnapshot: Direct start")
+		runBackupProcess()
+		return
+	}
+
+	log.Println("StartSnapshot: Crontime " + config.CrontTime)
 	c := cron.New(cron.WithSeconds()) // Use cron.WithSeconds() if you want to schedule tasks with second-level precision
-	c.AddFunc("@daily", runBackupProcess)
-
+	c.AddFunc("25 * * * * *", runBackupProcess)
 	c.Start()
 
 	// Keep the main function running indefinitely
@@ -241,44 +358,68 @@ func main() {
 }
 
 func runBackupProcess() {
+	status := "success"
 
-	log.Printf("Stopping container %s", config.ContainerName)
+	log.Printf("containerService: Stopping container %s", config.ContainerName)
 	err := stopContainer(config.ContainerName)
 	if err != nil {
-		log.Fatalf("Error stopping container %s: %v", config.ContainerName, err)
+		log.Printf("containerService: Error stopping container %s: %v", config.ContainerName, err)
 	} else {
-		fmt.Printf("Container %s stopped\n", config.ContainerName)
+		log.Printf("containerService: Container %s stopped\n", config.ContainerName)
 	}
 
-	currentDateTime := time.Now().Format("20060102-150405")
-	archivePath := fmt.Sprintf("%s.tar.gz", currentDateTime)
+	currentDateTime := currentDateTime()
+	archivePath := fmt.Sprintf("%s-%s-%s.tar.gz", config.Protocol, config.Network, currentDateTime)
 
-	log.Println("Creating tar.gz archive")
+	log.Println("archiveCreate: Creating tar.gz archive")
 	err = createTarGz(config.FilePath, archivePath)
 	if err != nil {
-		log.Fatalf("Error creating tar.gz archive: %v", err)
+		log.Printf("archiveCreate: Error creating tar.gz archive: %v", err)
+		status = "error"
 	}
 
 	// Upload the tar.gz archive to S3
-	log.Println("Uploading to S3 into bucket", config.BucketName)
-	err = uploadToS3(archivePath, config.BucketName, fmt.Sprintf("%s/%s", currentDateTime, filepath.Base(archivePath)))
+	log.Println("uploadS3: Uploading to S3 into bucket", config.BucketName)
+	err = uploadToS3(archivePath, config.BucketName, archivePath)
 	if err != nil {
-		log.Fatalf("Error uploading to S3: %v", err)
+		log.Printf("uploadS3: Error uploading to S3: %v", err)
+		status = "error"
+	}
+
+	log.Println("stateFile: Create status file")
+	err = generateSnapshotStatus(status, archivePath)
+	if err != nil {
+		log.Printf("stateFile: Error creating status file: %v", err)
+	}
+
+	// Upload state file
+	log.Println("uploadS3: Uploading state file to bucket", config.BucketName)
+	err = uploadToS3("snapshot-latest.json", config.BucketName, "snapshot-latest.json")
+	if err != nil {
+		log.Printf("uploadS3: Error uploading to S3: %v", err)
+		status = "error"
 	}
 
 	// Remove the tar.gz archive after the upload is complete
-	log.Println("Removing tar.gz archive")
+	log.Println("cleanUp: Removing tar.gz archive")
 	err = os.Remove(archivePath)
 	if err != nil {
-		log.Fatalf("Error removing tar.gz archive: %v", err)
+		log.Printf("cleanUp: Error removing tar.gz archive: %v", err)
 	}
 
-	log.Printf("Starting container %s", config.ContainerName)
+	// Remove the tar.gz archive after the upload is complete
+	log.Println("cleanUp: Removing statefile.json")
+	err = os.Remove("snapshot-latest.json")
+	if err != nil {
+		log.Printf("cleanUp: Error removing tar.gz archive: %v", err)
+	}
+
+	log.Printf("containerService: Starting container %s", config.ContainerName)
 	err = startContainerByName(config.ContainerName)
 	if err != nil {
-		log.Fatalf("Error starting container %s: %v", config.ContainerName, err)
+		log.Fatalf("containerService: Error starting container %s: %v", config.ContainerName, err)
 	} else {
-		fmt.Printf("Container %s started\n", config.ContainerName)
+		log.Printf("containerService: Container %s started\n", config.ContainerName)
 	}
-	log.Println("Nimiq snapshot Genrator finished")
+	log.Printf("servivce: %s Snapshot Genrator finished", config.Protocol)
 }

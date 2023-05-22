@@ -1,5 +1,9 @@
 {
     "container_name": "nimiq",
+    "network": "testnet",
+    "protocol": "nimiq-v1",
+    "protocol_version": "1.0.0",
+    "cron_time": "* 0 * * *",
     "file_path": "/root/data",
     "bucket_name": "nimiq-v1",
     "access_key": "xxxxxxxxxxxxxx",
