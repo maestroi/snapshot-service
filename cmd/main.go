@@ -43,7 +43,6 @@ type Config struct {
 
 type SnapshotStatus struct {
 	DateTime        string `json:"dateTime"`
-	Hostname        string `json:"hostname"`
 	FileName        string `json:"fileName"`
 	Status          string `json:"status"`
 	Network         string `json:"network"`
@@ -113,12 +112,13 @@ func pruneOldSnapshots() error {
 	}
 
 	bucketName := config.BucketName
-	prefix := fmt.Sprintf("%s-%s-", config.Protocol, config.Network)
 	logPrefix := "pruneOldSnapshots: "
+	directoryPrefix := fmt.Sprintf("%s/%s/", config.Protocol, config.Network)
+	fileNameSuffix := ".tar.gz"
 
 	svc := s3.New(sess)
 
-	resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(bucketName), Prefix: aws.String(prefix)})
+	resp, err := svc.ListObjectsV2(&s3.ListObjectsV2Input{Bucket: aws.String(bucketName), Prefix: aws.String(directoryPrefix)})
 	if err != nil {
 		return err
 	}
@@ -133,8 +133,8 @@ func pruneOldSnapshots() error {
 	log.Printf("%sLooking for old snapshot files in bucket %s", logPrefix, bucketName)
 	for _, item := range resp.Contents {
 		key := *item.Key
-		if strings.HasPrefix(key, fmt.Sprintf("%s-%s-", config.Protocol, config.Network)) {
-			timestampStr := strings.TrimSuffix(strings.TrimPrefix(key, fmt.Sprintf("%s-%s-", config.Protocol, config.Network)), ".tar.gz")
+		if strings.HasSuffix(key, fileNameSuffix) {
+			timestampStr := strings.TrimSuffix(strings.TrimPrefix(key, directoryPrefix), fileNameSuffix)
 			timestamp, err := time.Parse("20060102-150405", timestampStr)
 			if err != nil {
 				return err
@@ -145,13 +145,13 @@ func pruneOldSnapshots() error {
 
 	// Sort files by timestamp
 	sort.Slice(files, func(i, j int) bool {
-		return files[i].timestamp.After(files[j].timestamp)
+		return files[i].timestamp.Before(files[j].timestamp)
 	})
 
 	// Delete all but the last x files
 	if len(files) > config.SnapshotToKeep {
 		log.Printf("%sFound %d files in bucket %s, deleting older ones", logPrefix, len(files), bucketName)
-		for _, file := range files[5:] {
+		for _, file := range files[:len(files)-config.SnapshotToKeep] {
 			log.Printf("%sDeleting file %s", logPrefix, file.key)
 			_, err := svc.DeleteObject(&s3.DeleteObjectInput{Bucket: aws.String(bucketName), Key: aws.String(file.key)})
 			if err != nil {
@@ -166,11 +166,6 @@ func pruneOldSnapshots() error {
 }
 
 func generateSnapshotStatus(status string, filename string) error {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return err
-	}
-
 	currentDateTime := currentDateTime()
 
 	snapshotStatus := SnapshotStatus{
@@ -179,7 +174,6 @@ func generateSnapshotStatus(status string, filename string) error {
 		ProtocolVersion: config.ProtocolVer,
 		Network:         config.Network,
 		FileName:        filename,
-		Hostname:        hostname,
 		Status:          status,
 	}
 
@@ -286,56 +280,88 @@ func uploadToS3(filePath, bucket, key string) error {
 	return err
 }
 
-func createTarGz(folderPath string, archivePath string) error {
-	file, err := os.Create(archivePath)
+func createTarGzToS3(bucketName string, key string, folderPath string) error {
+	sess, err := session.NewSession(&aws.Config{
+		Region:           aws.String(config.Region),
+		Credentials:      credentials.NewStaticCredentials(config.AccessKey, config.SecretKey, ""),
+		Endpoint:         aws.String(config.Endpoint),
+		S3ForcePathStyle: aws.Bool(true),
+	})
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 
-	gw, _ := pgzip.NewWriterLevel(file, pgzip.BestSpeed)
-	defer gw.Close()
+	uploader := s3manager.NewUploader(sess)
+
+	pr, pw := io.Pipe()
+
+	gw, err := pgzip.NewWriterLevel(pw, pgzip.BestSpeed)
+	if err != nil {
+		return err
+	}
 
 	tw := tar.NewWriter(gw)
-	defer tw.Close()
 
-	err = filepath.Walk(folderPath, func(path string, info os.FileInfo, err error) error {
+	go func() {
+		defer pw.Close()
+		defer gw.Close()
+		defer tw.Close()
+
+		err := filepath.Walk(folderPath, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+
+			if info.IsDir() {
+				return nil
+			}
+
+			relPath, err := filepath.Rel(folderPath, path)
+			if err != nil {
+				return err
+			}
+
+			log.Printf("Adding %s", relPath)
+
+			header, err := tar.FileInfoHeader(info, relPath)
+			if err != nil {
+				return err
+			}
+
+			header.Name = relPath
+
+			if err := tw.WriteHeader(header); err != nil {
+				return err
+			}
+
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			_, err = io.Copy(tw, file)
+			return err
+		})
+
 		if err != nil {
-			return err
+			// handle error
 		}
+	}()
 
-		if info.IsDir() {
-			return nil
-		}
-
-		relPath, err := filepath.Rel(folderPath, path)
-		if err != nil {
-			return err
-		}
-
-		header, err := tar.FileInfoHeader(info, relPath)
-		if err != nil {
-			return err
-		}
-
-		header.Name = relPath
-
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-
-		_, err = io.Copy(tw, file)
-		return err
+	_, err = uploader.Upload(&s3manager.UploadInput{
+		Bucket: aws.String(bucketName),
+		Key:    aws.String(key),
+		Body:   pr,
 	})
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
+
 func main() {
 	log.Printf("%s snapshot Genrator started", config.Protocol)
 	log.Println("Protocol: " + config.Protocol)
@@ -369,47 +395,35 @@ func runBackupProcess() {
 	}
 
 	currentDateTime := currentDateTime()
-	archivePath := fmt.Sprintf("%s-%s-%s.tar.gz", config.Protocol, config.Network, currentDateTime)
+	key := fmt.Sprintf("%s/%s/%s.tar.gz", config.Protocol, config.Network, currentDateTime)
 
-	log.Println("archiveCreate: Creating tar.gz archive")
-	err = createTarGz(config.FilePath, archivePath)
+	log.Println("archiveCreate: Create and Stream snapshot to S3")
+	err = createTarGzToS3(config.BucketName, key, config.FilePath)
 	if err != nil {
 		log.Printf("archiveCreate: Error creating tar.gz archive: %v", err)
 		status = "error"
 	}
 
-	// Upload the tar.gz archive to S3
-	log.Println("uploadS3: Uploading to S3 into bucket", config.BucketName)
-	err = uploadToS3(archivePath, config.BucketName, archivePath)
-	if err != nil {
-		log.Printf("uploadS3: Error uploading to S3: %v", err)
-		status = "error"
-	}
+	stateFileName := "snapshot-latest.json"
+	stateFileKey := fmt.Sprintf("%s/%s/%s", config.Protocol, config.Network, stateFileName)
 
 	log.Println("stateFile: Create status file")
-	err = generateSnapshotStatus(status, archivePath)
+	err = generateSnapshotStatus(status, stateFileName)
 	if err != nil {
 		log.Printf("stateFile: Error creating status file: %v", err)
 	}
 
 	// Upload state file
 	log.Println("uploadS3: Uploading state file to bucket", config.BucketName)
-	err = uploadToS3("snapshot-latest.json", config.BucketName, "snapshot-latest.json")
+	err = uploadToS3(stateFileName, config.BucketName, stateFileKey)
 	if err != nil {
 		log.Printf("uploadS3: Error uploading to S3: %v", err)
 		status = "error"
 	}
 
 	// Remove the tar.gz archive after the upload is complete
-	log.Println("cleanUp: Removing tar.gz archive")
-	err = os.Remove(archivePath)
-	if err != nil {
-		log.Printf("cleanUp: Error removing tar.gz archive: %v", err)
-	}
-
-	// Remove the tar.gz archive after the upload is complete
 	log.Println("cleanUp: Removing statefile.json")
-	err = os.Remove("snapshot-latest.json")
+	err = os.Remove(stateFileName)
 	if err != nil {
 		log.Printf("cleanUp: Error removing tar.gz archive: %v", err)
 	}

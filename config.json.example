@@ -9,5 +9,6 @@
     "access_key": "xxxxxxxxxxxxxx",
     "secret_key": "xxxxxxxxxxxxxxx",
     "endpoint": "https://s3.REGION.wasabisys.com",
-    "region": "eu-central-1"
+    "region": "eu-central-1",
+    "snapshot_to_keep": 4
 }
