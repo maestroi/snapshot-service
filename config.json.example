@@ -1,11 +1,12 @@
 {
-    "container_name": "nimiq",
+    "container_names": ["nimiq"],
     "network": "testnet",
     "protocol": "nimiq-v1",
     "protocol_version": "1.0.0",
     "cron_time": "* 0 * * *",
     "file_path": "/root/data",
     "bucket_name": "nimiq-v1",
+    "ignore_files": ["test.txt"],
     "access_key": "xxxxxxxxxxxxxx",
     "secret_key": "xxxxxxxxxxxxxxx",
     "endpoint": "https://s3.REGION.wasabisys.com",

@@ -27,18 +27,19 @@ import (
 )
 
 type Config struct {
-	ContainerName  string `json:"container_name"`
-	Network        string `json:"network"`
-	Protocol       string `json:"protocol"`
-	ProtocolVer    string `json:"protocol_version"`
-	CrontTime      string `json:"cron_time"`
-	FilePath       string `json:"file_path"`
-	BucketName     string `json:"bucket_name"`
-	AccessKey      string `json:"access_key"`
-	SecretKey      string `json:"secret_key"`
-	Endpoint       string `json:"endpoint"`
-	Region         string `json:"region"`
-	SnapshotToKeep int    `json:"snapshot_to_keep"`
+	ContainerNames []string `json:"container_names"`
+	Network        string   `json:"network"`
+	Protocol       string   `json:"protocol"`
+	ProtocolVer    string   `json:"protocol_version"`
+	IgnoreFiles    []string `json:"ignore_files"`
+	CrontTime      string   `json:"cron_time"`
+	FilePath       string   `json:"file_path"`
+	BucketName     string   `json:"bucket_name"`
+	AccessKey      string   `json:"access_key"`
+	SecretKey      string   `json:"secret_key"`
+	Endpoint       string   `json:"endpoint"`
+	Region         string   `json:"region"`
+	SnapshotToKeep int      `json:"snapshot_to_keep"`
 }
 
 type SnapshotStatus struct {
@@ -312,6 +313,14 @@ func createTarGzToS3(bucketName string, key string, folderPath string) error {
 				return err
 			}
 
+			// If the current file is in the ignore list, skip it
+			for _, ignore := range config.IgnoreFiles {
+				if filepath.Base(path) == ignore {
+					log.Printf("Skipping %s", path)
+					return nil
+				}
+			}
+
 			if info.IsDir() {
 				return nil
 			}
@@ -321,7 +330,7 @@ func createTarGzToS3(bucketName string, key string, folderPath string) error {
 				return err
 			}
 
-			log.Printf("Adding %s", relPath)
+			log.Printf("ArchiveCreate: Adding %s", relPath)
 
 			header, err := tar.FileInfoHeader(info, relPath)
 			if err != nil {
@@ -345,7 +354,7 @@ func createTarGzToS3(bucketName string, key string, folderPath string) error {
 		})
 
 		if err != nil {
-			// handle error
+			return
 		}
 	}()
 
@@ -386,19 +395,21 @@ func main() {
 func runBackupProcess() {
 	status := "success"
 
-	log.Printf("containerService: Stopping container %s", config.ContainerName)
-	err := stopContainer(config.ContainerName)
-	if err != nil {
-		log.Printf("containerService: Error stopping container %s: %v", config.ContainerName, err)
-	} else {
-		log.Printf("containerService: Container %s stopped\n", config.ContainerName)
+	for _, containerName := range config.ContainerNames {
+		log.Printf("containerService: Stopping container %s", containerName)
+		err := stopContainer(containerName)
+		if err != nil {
+			log.Printf("containerService: Error stopping container %s: %v", containerName, err)
+		} else {
+			log.Printf("containerService: Container %s stopped\n", containerName)
+		}
 	}
 
 	currentDateTime := currentDateTime()
 	key := fmt.Sprintf("%s/%s/%s.tar.gz", config.Protocol, config.Network, currentDateTime)
 
 	log.Println("archiveCreate: Create and Stream snapshot to S3")
-	err = createTarGzToS3(config.BucketName, key, config.FilePath)
+	err := createTarGzToS3(config.BucketName, key, config.FilePath)
 	if err != nil {
 		log.Printf("archiveCreate: Error creating tar.gz archive: %v", err)
 		status = "error"
@@ -428,12 +439,14 @@ func runBackupProcess() {
 		log.Printf("cleanUp: Error removing tar.gz archive: %v", err)
 	}
 
-	log.Printf("containerService: Starting container %s", config.ContainerName)
-	err = startContainerByName(config.ContainerName)
-	if err != nil {
-		log.Fatalf("containerService: Error starting container %s: %v", config.ContainerName, err)
-	} else {
-		log.Printf("containerService: Container %s started\n", config.ContainerName)
+	for _, containerName := range config.ContainerNames {
+		log.Printf("containerService: Starting container %s", containerName)
+		err := startContainerByName(containerName)
+		if err != nil {
+			log.Printf("containerService: Error stopping container %s: %v", containerName, err)
+		} else {
+			log.Printf("containerService: Container %s stopped\n", containerName)
+		}
 	}
-	log.Printf("servivce: %s Snapshot Genrator finished", config.Protocol)
+	log.Printf("service: %s Snapshot finished", config.Protocol)
 }
