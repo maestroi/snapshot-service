@@ -16,4 +16,4 @@ WORKDIR /
 
 COPY --from=builder /snapshot-service  /snapshot-service 
 
-CMD ["/snapshot-service", "--config=", "config.json"]
+CMD ["/snapshot-service", "--config=config.json"]
