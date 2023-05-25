@@ -113,7 +113,7 @@ func pruneOldSnapshots() error {
 	}
 
 	bucketName := config.BucketName
-	logPrefix := "pruneOldSnapshots: "
+	logPrefix := "PruneOldSnapshots: "
 	directoryPrefix := fmt.Sprintf("%s/%s/", config.Protocol, config.Network)
 	fileNameSuffix := ".tar.gz"
 
@@ -396,57 +396,57 @@ func runBackupProcess() {
 	status := "success"
 
 	for _, containerName := range config.ContainerNames {
-		log.Printf("containerService: Stopping container %s", containerName)
+		log.Printf("ContainerService: Stopping container %s", containerName)
 		err := stopContainer(containerName)
 		if err != nil {
-			log.Printf("containerService: Error stopping container %s: %v", containerName, err)
+			log.Printf("ContainerService: Error stopping container %s: %v", containerName, err)
 		} else {
-			log.Printf("containerService: Container %s stopped\n", containerName)
+			log.Printf("ContainerService: Container %s stopped\n", containerName)
 		}
 	}
 
 	currentDateTime := currentDateTime()
 	key := fmt.Sprintf("%s/%s/%s.tar.gz", config.Protocol, config.Network, currentDateTime)
 
-	log.Println("archiveCreate: Create and Stream snapshot to S3")
+	log.Println("ArchiveCreate: Create and Stream snapshot to S3")
 	err := createTarGzToS3(config.BucketName, key, config.FilePath)
 	if err != nil {
-		log.Printf("archiveCreate: Error creating tar.gz archive: %v", err)
+		log.Printf("ArchiveCreate: Error creating tar.gz archive: %v", err)
 		status = "error"
 	}
 
 	stateFileName := "snapshot-latest.json"
 	stateFileKey := fmt.Sprintf("%s/%s/%s", config.Protocol, config.Network, stateFileName)
 
-	log.Println("stateFile: Create status file")
+	log.Println("StateFile: Create status file")
 	err = generateSnapshotStatus(status, stateFileName)
 	if err != nil {
-		log.Printf("stateFile: Error creating status file: %v", err)
+		log.Printf("StateFile: Error creating status file: %v", err)
 	}
 
 	// Upload state file
-	log.Println("uploadS3: Uploading state file to bucket", config.BucketName)
+	log.Println("UploadS3: Uploading state file to bucket", config.BucketName)
 	err = uploadToS3(stateFileName, config.BucketName, stateFileKey)
 	if err != nil {
-		log.Printf("uploadS3: Error uploading to S3: %v", err)
+		log.Printf("UploadS3: Error uploading to S3: %v", err)
 		status = "error"
 	}
 
 	// Remove the tar.gz archive after the upload is complete
-	log.Println("cleanUp: Removing statefile.json")
+	log.Println("CleanUp: Removing statefile.json")
 	err = os.Remove(stateFileName)
 	if err != nil {
 		log.Printf("cleanUp: Error removing tar.gz archive: %v", err)
 	}
 
 	for _, containerName := range config.ContainerNames {
-		log.Printf("containerService: Starting container %s", containerName)
+		log.Printf("ContainerService: Starting container %s", containerName)
 		err := startContainerByName(containerName)
 		if err != nil {
-			log.Printf("containerService: Error stopping container %s: %v", containerName, err)
+			log.Printf("ContainerService: Error stopping container %s: %v", containerName, err)
 		} else {
-			log.Printf("containerService: Container %s stopped\n", containerName)
+			log.Printf("ContainerService: Container %s stopped\n", containerName)
 		}
 	}
-	log.Printf("service: %s Snapshot finished", config.Protocol)
+	log.Printf("Service: %s Snapshot finished", config.Protocol)
 }
