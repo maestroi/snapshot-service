@@ -1,8 +1,9 @@
-version: '3.9'
+version: '3.3'
 
 services:
   snasphot-service:
     build: .
+    container_name: snapshot
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./test/testalbatross-history-consensus:/test/testalbatross-full-consensus
