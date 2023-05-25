@@ -385,7 +385,7 @@ func main() {
 
 	log.Println("StartSnapshot: Crontime " + config.CrontTime)
 	c := cron.New(cron.WithSeconds()) // Use cron.WithSeconds() if you want to schedule tasks with second-level precision
-	c.AddFunc("25 * * * * *", runBackupProcess)
+	c.AddFunc(config.CrontTime, runBackupProcess)
 	c.Start()
 
 	// Keep the main function running indefinitely
