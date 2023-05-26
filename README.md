@@ -1,82 +1,94 @@
 # Docker Container Snapshot Service
 
-The Docker Container Snapshot Service is a simple utility that automates the process of stopping a Docker container, creating a tar.gz archive of a specified folder, uploading the archive to an S3-compatible storage service (e.g., AWS S3 or Wasabi), and restarting the container. The backup process is scheduled to run daily.
+The Docker Container Snapshot Service is a powerful utility designed to streamline the process of snapshotting Docker containers. The service automatically stops a specified Docker container, generates a tar.gz archive of a targeted folder, uploads this archive to an S3-compatible storage service (e.g., AWS S3 or Wasabi), and then restarts the container. This process is automated and is scheduled to run on a daily basis.
 
 ## Prerequisites
 
-- Go 1.16 or later
-- Docker installed and running on the host machine
+Ensure the following prerequisites are met:
+
+- Go 1.16 or later is installed on your system.
+- Docker is installed and actively running on your host machine.
 
 ## Dependencies
+
+This service utilizes the following dependencies:
 
 - [github.com/aws/aws-sdk-go](https://github.com/aws/aws-sdk-go)
 - [github.com/docker/docker](https://github.com/docker/docker)
 - [github.com/robfig/cron/v3](https://github.com/robfig/cron)
 
-## Installation
+## Installation Steps
 
-1. Clone the repository:
+1. Clone the repository with the following command:
 
 ```bash
 git clone https://github.com/maestroi/snapshot-service.git
 ```
 
-2. Change the working directory:
+2. Navigate to the cloned repository:
 
 ```bash
 cd snapshot-service
 ```
 
-3. Install the dependencies:
+3. Download and install the necessary dependencies:
 
 ```bash
 go get -d ./...
 ```
 
-4. Build the binary:
+4. Compile the application:
 
 ```bash
 go build -o snapshot-service ./cmd/main.go
 ```
 
-## Configuration
+## Configuration Guide
 
-Create a `config.json` file  with the following structure:
+You need to create a `config.json` file with the following structure:
 
 ```json
 {
     "container_name": "your_container_name",
+    "network": "protocol_network",
+    "protocol": "protocol_name",
+    "protocol_version": "protocol_version_number",
     "file_path": "path/to/your/folder",
     "bucket_name": "your_s3_bucket_name",
     "key_name": "your_object_key_name",
     "access_key": "your_s3_access_key",
     "secret_key": "your_s3_secret_key",
     "endpoint": "https://your_s3_endpoint",
-    "region": "your_s3_region"
+    "region": "your_s3_region",
+    "snapshot_to_keep": 5
 }
 ```
 
-Replace the placeholders with your actual values:
+Substitute the placeholders with your specific values:
 
-- `container_name`: The name of the Docker container you want to stop and restart.
-- `file_path`: The path to the folder you want to archive and upload to S3.
-- `bucket_name`: The name of the S3 bucket where the archive will be uploaded.
-- `key_name`: The S3 object key (path) where the archive will be stored.
-- `access_key`: Your S3-compatible storage service access key.
-- `secret_key`: Your S3-compatible storage service secret key.
+- `container_name`: The Docker container's name to be stopped and restarted.
+- `network`: The network of the protocol For example testnet
+- `protocol`: The name of the protocol for example nimiq-v1
+- `protocol_version`: The version of the protocol running on 1.0.0
+- `file_path`: The directory path that you wish to archive and upload to S3.
+- `bucket_name`: The destination S3 bucket's name.
+- `key_name`: The designated S3 object key (path) for the stored archive.
+- `access_key`: Your S3-compatible storage service's access key.
+- `secret_key`: Your S3-compatible storage service's secret key.
 - `endpoint`: The endpoint URL of your S3-compatible storage service.
-- `region`: The region of your S3-compatible storage service.
+- `region`: Your S3-compatible storage service's region.
+- `snapshot_to_keep`: Amount of snapshots to keep in bucket
 
-## Usage
+## Usage Instructions
 
-Start the Docker Container Snapshot Service with the following command:
+You can start the Docker Container Snapshot Service using the command below:
 
 ```bash
 ./snapshot-service -config config.json
 ```
 
-The service will read the configuration from the specified file and start the backup process every 24 hours.
+The service will parse the provided configuration file and initiate the backup procedure every 24 hours.
 
-## License
+## License Information
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is distributed under the MIT License. Refer to the [LICENSE](LICENSE) file for more information.
