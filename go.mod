@@ -7,7 +7,7 @@ require (
 	github.com/docker/docker v23.0.6+incompatible
 	github.com/klauspost/pgzip v1.2.6
 	github.com/robfig/cron/v3 v3.0.1
-	golang.org/x/net v0.6.0
+	golang.org/x/net v0.7.0
 )
 
 require (
